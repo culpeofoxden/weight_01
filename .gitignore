@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+
+# Local environment
+.env
+.env.local
+
+# Logs and temp files
+*.log
+tmp/
+backend/var/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Build artifacts
+*.tsbuildinfo

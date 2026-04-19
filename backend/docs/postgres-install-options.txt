@@ -1,0 +1,10 @@
+--mode unattended
+--unattendedmodeui minimalWithDialogs
+--enable-components server,commandlinetools
+--create_shortcuts 0
+--superpassword Postgres123!
+--serverport 5432
+--prefix C:\Program Files\PostgreSQL\16
+--datadir C:\Program Files\PostgreSQL\16\data
+--debuglevel 4
+--debugtrace C:\Users\beher\Downloads\amber-setup\postgresql-install-debug.log
