@@ -1,0 +1,304 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f5f6f7;
+  color: #1f2933;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.app {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-name {
+  color: #667085;
+  font-size: 14px;
+}
+
+.logout-button,
+.login-panel button {
+  border: 1px solid #1f2933;
+  background: #1f2933;
+  color: #ffffff;
+  padding: 10px 16px;
+}
+
+.tabs {
+  display: inline-flex;
+  border: 1px solid #c8d0d9;
+  background: #ffffff;
+}
+
+.tabs button {
+  min-width: 112px;
+  border: 0;
+  border-right: 1px solid #c8d0d9;
+  background: transparent;
+  color: #344054;
+  padding: 10px 16px;
+}
+
+.tabs button:last-child {
+  border-right: 0;
+}
+
+.tabs button.active {
+  background: #1f2933;
+  color: #ffffff;
+}
+
+.content {
+  display: grid;
+  gap: 16px;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metric,
+.panel,
+.toolbar {
+  border: 1px solid #d9dee5;
+  background: #ffffff;
+}
+
+.metric {
+  padding: 16px;
+}
+
+.metric-label {
+  margin-bottom: 8px;
+  color: #667085;
+  font-size: 13px;
+}
+
+.metric-value {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.metric-value span {
+  color: #667085;
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.panel {
+  padding: 16px;
+}
+
+.panel-title {
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.status-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.status-list div {
+  border: 1px solid #e5e7eb;
+  padding: 12px;
+}
+
+.status-list dt {
+  margin-bottom: 6px;
+  color: #667085;
+  font-size: 13px;
+}
+
+.status-list dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.toolbar {
+  padding: 12px 16px;
+}
+
+.toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #344054;
+  font-weight: 700;
+}
+
+.toolbar input {
+  border: 1px solid #b8c0cc;
+  padding: 8px 10px;
+}
+
+.notice {
+  margin-bottom: 12px;
+  border: 1px solid #c8d0d9;
+  background: #f8fafc;
+  padding: 10px 12px;
+  color: #344054;
+}
+
+.notice.error {
+  border-color: #d92d20;
+  background: #fff4f2;
+  color: #b42318;
+}
+
+.login-page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-panel {
+  display: grid;
+  width: min(360px, 100%);
+  gap: 14px;
+  border: 1px solid #d9dee5;
+  background: #ffffff;
+  padding: 24px;
+}
+
+.login-panel label {
+  display: grid;
+  gap: 6px;
+  color: #344054;
+  font-weight: 700;
+}
+
+.login-panel input {
+  width: 100%;
+  border: 1px solid #b8c0cc;
+  padding: 9px 10px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #ffffff;
+}
+
+th,
+td {
+  border-bottom: 1px solid #e5e7eb;
+  padding: 10px 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+th {
+  background: #f1f3f5;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+td {
+  font-size: 14px;
+}
+
+.empty {
+  color: #667085;
+  text-align: center;
+}
+
+.download-button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid #b8c0cc;
+  background: #ffffff;
+  color: #1f2933;
+  font-weight: 700;
+}
+
+.download-button:hover {
+  background: #f1f3f5;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .app {
+    padding: 16px;
+  }
+
+  .topbar,
+  .header-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tabs {
+    width: 100%;
+  }
+
+  .tabs button {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .metrics,
+  .status-list {
+    grid-template-columns: 1fr;
+  }
+}

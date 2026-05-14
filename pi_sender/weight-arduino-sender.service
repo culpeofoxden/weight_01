@@ -1,0 +1,16 @@
+[Unit]
+Description=Arduino weight sender
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=admin1
+WorkingDirectory=/home/admin1/weight_sender
+EnvironmentFile=/home/admin1/weight_sender/.env
+ExecStart=/usr/bin/python3 /home/admin1/weight_sender/arduino_sender.py --serial /dev/ttyUSB0 --baud 9600 --api-base https://beheramber.com --queue-db /home/admin1/weight_sender/arduino_sender_queue.sqlite3
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
