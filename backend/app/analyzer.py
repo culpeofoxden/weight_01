@@ -172,7 +172,7 @@ class BucketAnalyzer:
             status = "filling"
         elif tare_seen:
             status = "waiting_fill"
-        elif latest.weight > FILLING_START_THRESHOLD:
+        elif latest_measurement is not None and latest_measurement.weight > FILLING_START_THRESHOLD:
             status = "waiting_tare"
         else:
             status = "waiting_tare"

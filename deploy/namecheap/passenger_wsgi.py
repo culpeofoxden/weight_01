@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import sqlite3
+import time
 from datetime import date, datetime
 from http import cookies
 from pathlib import Path
@@ -15,6 +16,8 @@ from itsdangerous import BadSignature, TimestampSigner
 APP_ROOT = Path(__file__).resolve().parent
 PUBLIC_DIR = APP_ROOT / "public"
 DB_PATH = APP_ROOT / "weight_dashboard.sqlite3"
+REFRESH_STAMP_PATH = APP_ROOT / ".last_bucket_refresh"
+REFRESH_LOCK_PATH = APP_ROOT / ".bucket_refresh.lock"
 
 USERNAME = os.getenv("WEIGHT_DASHBOARD_USER", "admin")
 PASSWORD = os.getenv("WEIGHT_DASHBOARD_PASSWORD", "change-me")
@@ -28,6 +31,8 @@ NEAR_ZERO_THRESHOLD = 0.05
 FILLING_START_THRESHOLD = 0.2
 REMOVED_THRESHOLD = -0.5
 STABLE_READING_COUNT = 5
+REFRESH_INTERVAL_SECONDS = 30
+REFRESH_LOCK_STALE_SECONDS = 120
 
 signer = TimestampSigner(SECRET)
 
@@ -171,8 +176,34 @@ def list_measurements():
     return query("SELECT id, timestamp, weight FROM measurements ORDER BY timestamp ASC, id ASC")
 
 
+def list_recent_measurements(limit=10000):
+    rows = query(
+        """
+        SELECT id, timestamp, weight
+        FROM measurements
+        ORDER BY timestamp DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    return list(reversed(rows))
+
+
 def list_device_statuses():
     return query("SELECT id, timestamp, status, raw FROM device_statuses ORDER BY timestamp ASC, id ASC")
+
+
+def list_recent_device_statuses(limit=2000):
+    rows = query(
+        """
+        SELECT id, timestamp, status, raw
+        FROM device_statuses
+        ORDER BY timestamp DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    return list(reversed(rows))
 
 
 def analyze_buckets(measurements, device_statuses=()):
@@ -274,6 +305,36 @@ def refresh_buckets():
 
         stale_ids = [row["id"] for row in existing_rows if (row["start_timestamp"], row["end_timestamp"]) not in next_keys]
         connection.executemany("DELETE FROM buckets WHERE id = ?", [(bucket_id,) for bucket_id in stale_ids])
+
+
+def refresh_buckets_if_stale(force=False):
+    now = time.time()
+    if not force and REFRESH_STAMP_PATH.exists():
+        try:
+            if now - REFRESH_STAMP_PATH.stat().st_mtime < REFRESH_INTERVAL_SECONDS:
+                return
+        except OSError:
+            pass
+
+    try:
+        fd = os.open(REFRESH_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            if now - REFRESH_LOCK_PATH.stat().st_mtime > REFRESH_LOCK_STALE_SECONDS:
+                REFRESH_LOCK_PATH.unlink()
+        except OSError:
+            pass
+        return
+
+    try:
+        os.close(fd)
+        refresh_buckets()
+        REFRESH_STAMP_PATH.write_text(str(now), encoding="utf-8")
+    finally:
+        try:
+            REFRESH_LOCK_PATH.unlink()
+        except OSError:
+            pass
 
 
 def current_state(measurements, device_statuses=()):
@@ -422,7 +483,6 @@ def application(environ, start_response):
             "INSERT INTO measurements (timestamp, weight, source_event_id) VALUES (?, ?, ?)",
             (payload["timestamp"], float(payload["weight"]), source_event_id),
         )
-        refresh_buckets()
         return json_response(start_response, "201 Created", {"id": measurement_id, "timestamp": payload["timestamp"], "weight": float(payload["weight"])})
 
     if method == "POST" and path == "/api/device-status":
@@ -444,7 +504,8 @@ def application(environ, start_response):
             """,
             (payload["timestamp"], payload["status"], payload.get("raw", ""), source_event_id),
         )
-        refresh_buckets()
+        if payload["status"] == "scale_waiting":
+            refresh_buckets_if_stale()
         return json_response(
             start_response,
             "201 Created",
@@ -460,9 +521,9 @@ def application(environ, start_response):
         denied = auth_required(start_response, environ)
         if denied:
             return denied
-        measurements = list_measurements()
+        measurements = list_recent_measurements()
         latest = measurements[-1] if measurements else None
-        device_statuses = list_device_statuses()
+        device_statuses = list_recent_device_statuses()
         latest_status_rows = query("SELECT * FROM device_statuses ORDER BY timestamp DESC, id DESC LIMIT 1")
         latest_device_status = latest_status_rows[0] if latest_status_rows else None
         all_buckets = query("SELECT * FROM buckets ORDER BY start_timestamp ASC, id ASC")
@@ -491,7 +552,7 @@ def application(environ, start_response):
                 "current_bucket_max_weight": state["current_bucket_max_weight"],
                 "latest_measurement": dict(latest) if latest else None,
                 "current_bucket_started_at": state["current_bucket_started_at"],
-                "measurements": len(measurements),
+                "measurements": query("SELECT COUNT(*) AS total FROM measurements")[0]["total"],
                 "buckets": len(all_buckets),
             },
         )
@@ -500,6 +561,7 @@ def application(environ, start_response):
         denied = auth_required(start_response, environ)
         if denied:
             return denied
+        refresh_buckets_if_stale()
         params = parse_qs(environ.get("QUERY_STRING", ""))
         selected_date = params.get("date", [datetime.now(UKRAINE_TZ).date().isoformat()])[0]
         bucket_rows = query("SELECT * FROM buckets WHERE bucket_date = ? ORDER BY start_timestamp ASC, id ASC", (selected_date,))
