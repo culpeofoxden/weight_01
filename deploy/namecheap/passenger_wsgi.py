@@ -34,6 +34,8 @@ NEAR_ZERO_THRESHOLD = 0.05
 FILLING_START_THRESHOLD = 0.2
 REMOVED_THRESHOLD = -0.5
 STABLE_READING_COUNT = 5
+STABLE_MAX_SPREAD_KG = 0.2
+SUSPECT_DROP_THRESHOLD_KG = 1.0
 REFRESH_INTERVAL_SECONDS = 30
 REFRESH_LOCK_STALE_SECONDS = 120
 SHIFTS = [
@@ -46,16 +48,50 @@ SHIFTS = [
 signer = TimestampSigner(SECRET)
 
 
-def stable_weight(readings):
+def median(values):
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def stable_weight(readings, context=None):
     positive_readings = [weight for weight in readings if weight > FILLING_START_THRESHOLD]
     if not positive_readings:
         return 0.0
 
-    tail = sorted(positive_readings[-STABLE_READING_COUNT:])
-    middle = len(tail) // 2
-    if len(tail) % 2:
-        return tail[middle]
-    return (tail[middle - 1] + tail[middle]) / 2
+    if len(positive_readings) < STABLE_READING_COUNT:
+        return median(positive_readings)
+
+    accepted = None
+    ignored_drops = []
+    for index in range(0, len(positive_readings) - STABLE_READING_COUNT + 1):
+        window = positive_readings[index:index + STABLE_READING_COUNT]
+        if max(window) - min(window) > STABLE_MAX_SPREAD_KG:
+            continue
+
+        candidate = median(window)
+        if accepted is not None and candidate < accepted - SUSPECT_DROP_THRESHOLD_KG:
+            ignored_drops.append((accepted, candidate))
+            continue
+        accepted = candidate
+
+    if accepted is not None:
+        if ignored_drops and context:
+            previous, ignored = ignored_drops[-1]
+            log_bucket_event(
+                "ignored_weight_drop",
+                context,
+                {
+                    "accepted_weight": round(previous, 3),
+                    "ignored_weight": round(ignored, 3),
+                    "drop_kg": round(previous - ignored, 3),
+                },
+            )
+        return accepted
+
+    return median(positive_readings[-STABLE_READING_COUNT:])
 
 
 def parse_bucket_timestamp(value):
@@ -174,8 +210,22 @@ def init_db():
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bucket_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_key TEXT NOT NULL UNIQUE,
+                event_type TEXT NOT NULL,
+                bucket_start_timestamp TEXT NOT NULL,
+                bucket_end_timestamp TEXT NOT NULL,
+                details TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_measurements_timestamp ON measurements (timestamp)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_buckets_date ON buckets (bucket_date)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_bucket_events_created_at ON bucket_events (created_at)")
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_measurements_source_event_id
@@ -203,6 +253,37 @@ def execute(sql, params=()):
     with sqlite3.connect(DB_PATH) as connection:
         cursor = connection.execute(sql, params)
         return cursor.lastrowid
+
+
+def log_bucket_event(event_type, context, details):
+    event_key = (
+        f"{event_type}:"
+        f"{context.get('start_timestamp', '')}:"
+        f"{context.get('end_timestamp', '')}:"
+        f"{details.get('accepted_weight', '')}:"
+        f"{details.get('ignored_weight', '')}"
+    )
+    execute(
+        """
+        INSERT OR IGNORE INTO bucket_events (
+            event_key,
+            event_type,
+            bucket_start_timestamp,
+            bucket_end_timestamp,
+            details,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event_key,
+            event_type,
+            context.get("start_timestamp", ""),
+            context.get("end_timestamp", ""),
+            json.dumps(details, ensure_ascii=False),
+            datetime.now(UKRAINE_TZ).isoformat(),
+        ),
+    )
 
 
 def json_response(start_response, status, payload, headers=None):
@@ -316,7 +397,10 @@ def analyze_buckets(measurements, device_statuses=()):
                     {
                         "start_timestamp": start_timestamp,
                         "end_timestamp": timestamp,
-                        "max_weight": stable_weight(readings),
+                        "max_weight": stable_weight(
+                            readings,
+                            {"start_timestamp": start_timestamp, "end_timestamp": timestamp},
+                        ),
                         "bucket_date": datetime.fromisoformat(start_timestamp).date().isoformat(),
                     }
                 )
@@ -353,7 +437,10 @@ def analyze_buckets(measurements, device_statuses=()):
                 {
                     "start_timestamp": start_timestamp,
                     "end_timestamp": timestamp,
-                    "max_weight": stable_weight(readings),
+                    "max_weight": stable_weight(
+                        readings,
+                        {"start_timestamp": start_timestamp, "end_timestamp": timestamp},
+                    ),
                     "bucket_date": datetime.fromisoformat(start_timestamp).date().isoformat(),
                 }
             )
@@ -681,6 +768,39 @@ def application(environ, start_response):
                 "all_bucket_count": len(all_date_buckets),
                 "all_total_weight": sum(float(b["max_weight"]) for b in all_date_buckets),
                 "buckets": buckets,
+            },
+        )
+
+    if method == "GET" and path == "/api/bucket-events":
+        denied = auth_required(start_response, environ)
+        if denied:
+            return denied
+        params = parse_qs(environ.get("QUERY_STRING", ""))
+        limit = min(500, max(1, int(params.get("limit", ["100"])[0])))
+        rows = query(
+            """
+            SELECT id, event_type, bucket_start_timestamp, bucket_end_timestamp, details, created_at
+            FROM bucket_events
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return json_response(
+            start_response,
+            "200 OK",
+            {
+                "events": [
+                    {
+                        "id": row["id"],
+                        "event_type": row["event_type"],
+                        "bucket_start_timestamp": row["bucket_start_timestamp"],
+                        "bucket_end_timestamp": row["bucket_end_timestamp"],
+                        "details": json.loads(row["details"]),
+                        "created_at": row["created_at"],
+                    }
+                    for row in rows
+                ]
             },
         )
 

@@ -7,6 +7,16 @@ NEAR_ZERO_THRESHOLD = 0.05
 FILLING_START_THRESHOLD = 0.2
 REMOVED_THRESHOLD = -0.5
 STABLE_READING_COUNT = 5
+STABLE_MAX_SPREAD_KG = 0.2
+SUSPECT_DROP_THRESHOLD_KG = 1.0
+
+
+def median(values: List[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
 
 
 def stable_weight(readings: List[float]) -> float:
@@ -14,11 +24,24 @@ def stable_weight(readings: List[float]) -> float:
     if not positive_readings:
         return 0.0
 
-    tail = sorted(positive_readings[-STABLE_READING_COUNT:])
-    middle = len(tail) // 2
-    if len(tail) % 2:
-        return tail[middle]
-    return (tail[middle - 1] + tail[middle]) / 2
+    if len(positive_readings) < STABLE_READING_COUNT:
+        return median(positive_readings)
+
+    accepted = None
+    for index in range(0, len(positive_readings) - STABLE_READING_COUNT + 1):
+        window = positive_readings[index:index + STABLE_READING_COUNT]
+        if max(window) - min(window) > STABLE_MAX_SPREAD_KG:
+            continue
+
+        candidate = median(window)
+        if accepted is not None and candidate < accepted - SUSPECT_DROP_THRESHOLD_KG:
+            continue
+        accepted = candidate
+
+    if accepted is not None:
+        return accepted
+
+    return median(positive_readings[-STABLE_READING_COUNT:])
 
 
 class BucketAnalyzer:
