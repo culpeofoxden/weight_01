@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 
 const STATUS_LABELS = {
-  no_data: "Нет данных",
-  scale_waiting: "Весы в режиме ожидания",
-  waiting_tare: "Ждем тару",
-  waiting_fill: "Оттарено, ждем заполнение",
-  filling: "Наполняется",
-  bucket_removed: "Ведро снято"
+  no_data: "Немає даних",
+  scale_waiting: "Ваги в режимі очікування",
+  waiting_tare: "Очікуємо тару",
+  waiting_fill: "Відтаровано, очікуємо наповнення",
+  filling: "Наповнюється",
+  bucket_removed: "Відро знято"
 };
 
 const SHIFT_OPTIONS = [
-  { code: "all", label: "Все смены" },
+  { code: "all", label: "Усі зміни" },
   { code: "day_before_lunch", label: "День до обіду" },
   { code: "day_after_lunch", label: "День після обіду" },
   { code: "night_before_lunch", label: "Ніч до обіду" },
@@ -49,7 +49,7 @@ function formatDuration(start, end) {
   const seconds = Math.max(0, Math.round((new Date(end) - new Date(start)) / 1000));
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
-  return `${minutes} мин ${rest} сек`;
+  return `${minutes} хв ${rest} сек`;
 }
 
 function shiftLabel(bucket) {
@@ -57,7 +57,7 @@ function shiftLabel(bucket) {
 }
 
 function bucketMetricLabel(status) {
-  return status === "bucket_removed" ? "Следующее ведро" : "Текущее ведро";
+  return status === "bucket_removed" ? "Наступне відро" : "Поточне відро";
 }
 
 async function apiFetch(url, options = {}) {
@@ -71,7 +71,7 @@ async function apiFetch(url, options = {}) {
   });
 
   if (response.status === 401) {
-    const error = new Error("Требуется вход");
+    const error = new Error("Потрібен вхід");
     error.status = 401;
     throw error;
   }
@@ -118,7 +118,7 @@ function LoginScreen({ onLogin }) {
       const payload = await response.json().catch(() => ({}));
       onLogin(payload.user || payload);
     } catch (err) {
-      setError(err.status === 401 ? "Неверный логин или пароль" : err.message);
+      setError(err.status === 401 ? "Невірний логін або пароль" : err.message);
     } finally {
       setLoading(false);
     }
@@ -127,9 +127,9 @@ function LoginScreen({ onLogin }) {
   return (
     <main className="login-page">
       <form className="login-panel" onSubmit={handleSubmit}>
-        <h1>Учет ведер</h1>
+        <h1>Облік відер</h1>
         <label>
-          Логин
+          Логін
           <input
             autoComplete="username"
             autoFocus
@@ -148,7 +148,7 @@ function LoginScreen({ onLogin }) {
         </label>
         {error ? <div className="notice error">{error}</div> : null}
         <button disabled={loading || !username || !password} type="submit">
-          {loading ? "Вход..." : "Войти"}
+          {loading ? "Вхід..." : "Увійти"}
         </button>
       </form>
     </main>
@@ -164,11 +164,11 @@ function BucketTable({ buckets, showDownload = false, onDownload }) {
         <thead>
           <tr>
             <th>#</th>
-            <th>Начало</th>
-            <th>Конец</th>
-            <th>Смена</th>
-            <th>Вес</th>
-            <th>Длительность</th>
+            <th>Початок</th>
+            <th>Кінець</th>
+            <th>Зміна</th>
+            <th>Вага</th>
+            <th>Тривалість</th>
             {showDownload ? <th>CSV</th> : null}
           </tr>
         </thead>
@@ -176,7 +176,7 @@ function BucketTable({ buckets, showDownload = false, onDownload }) {
           {buckets.length === 0 ? (
             <tr>
               <td className="empty" colSpan={colSpan}>
-                Ведер пока нет
+                Відер поки немає
               </td>
             </tr>
           ) : (
@@ -193,11 +193,11 @@ function BucketTable({ buckets, showDownload = false, onDownload }) {
                     <button
                       className="download-button"
                       onClick={() => onDownload(bucket)}
-                      title="Скачать CSV"
+                      title="Завантажити CSV"
                       type="button"
                     >
                       <span aria-hidden="true">↓</span>
-                      <span className="sr-only">Скачать CSV</span>
+                      <span className="sr-only">Завантажити CSV</span>
                     </button>
                   </td>
                 ) : null}
@@ -326,7 +326,7 @@ export default function App() {
     } catch (err) {
       if (err.status === 401) setUser(null);
       else if (err.status === 404) {
-        setError("Ведро обновилось. История перезагружена, нажмите скачать еще раз.");
+        setError("Відро оновилося. Історію перезавантажено, натисніть завантажити ще раз.");
         try {
           const payload = await getJson(`/api/buckets?date=${date}&shift=${shift}`);
           setHistory(payload);
@@ -358,7 +358,7 @@ export default function App() {
   if (!authChecked) {
     return (
       <main className="login-page">
-        <div className="login-panel">Проверка входа...</div>
+        <div className="login-panel">Перевірка входу...</div>
       </main>
     );
   }
@@ -370,64 +370,64 @@ export default function App() {
   return (
     <main className="app">
       <header className="topbar">
-        <h1>Учет ведер</h1>
+        <h1>Облік відер</h1>
         <div className="header-actions">
-          <nav className="tabs" aria-label="Разделы">
+          <nav className="tabs" aria-label="Розділи">
             <button className={tab === "now" ? "active" : ""} onClick={() => setTab("now")} type="button">
-              Сейчас
+              Зараз
             </button>
             <button
               className={tab === "history" ? "active" : ""}
               onClick={() => setTab("history")}
               type="button"
             >
-              История
+              Історія
             </button>
           </nav>
           {username ? <span className="user-name">{username}</span> : null}
           <button className="logout-button" onClick={handleLogout} type="button">
-            Выйти
+            Вийти
           </button>
         </div>
       </header>
 
-      {error ? <div className="notice error">Ошибка API: {error}</div> : null}
+      {error ? <div className="notice error">Помилка API: {error}</div> : null}
 
       {tab === "now" ? (
         <section className="content">
           <div className="metrics">
-            <Metric label="Текущий вес" value={formatKg(status?.current_weight)} />
-            <Metric label="Ведер сегодня" value={status?.today_bucket_count ?? 0} />
-            <Metric label="Вес сегодня" value={formatKg(status?.today_total_weight)} />
+            <Metric label="Поточна вага" value={formatKg(status?.current_weight)} />
+            <Metric label="Відер сьогодні" value={status?.today_bucket_count ?? 0} />
+            <Metric label="Вага сьогодні" value={formatKg(status?.today_total_weight)} />
             <Metric label={bucketLabel} value={`#${status?.current_bucket ?? 1}`} />
-            <Metric label="Ведер в смене" value={status?.current_shift_bucket_count ?? 0} />
-            <Metric label="Вес в смене" value={formatKg(status?.current_shift_total_weight)} />
+            <Metric label="Відер у зміні" value={status?.current_shift_bucket_count ?? 0} />
+            <Metric label="Вага у зміні" value={formatKg(status?.current_shift_total_weight)} />
           </div>
 
           <section className="panel">
-            <div className="panel-title">Состояние</div>
+            <div className="panel-title">Стан</div>
             <dl className="status-list">
               <div>
                 <dt>Статус</dt>
-                <dd>{STATUS_LABELS[status?.status] || status?.status || "Нет данных"}</dd>
+                <dd>{STATUS_LABELS[status?.status] || status?.status || "Немає даних"}</dd>
               </div>
               <div>
-                <dt>Стабильный вес текущего ведра</dt>
+                <dt>Стабільна вага поточного відра</dt>
                 <dd>{formatKg(status?.current_bucket_max_weight)}</dd>
               </div>
               <div>
-                <dt>Последнее измерение</dt>
+                <dt>Останнє вимірювання</dt>
                 <dd>{formatDateTime(latestTime)}</dd>
               </div>
               <div>
-                <dt>Текущая смена</dt>
+                <dt>Поточна зміна</dt>
                 <dd>{status?.current_shift?.shift_label || "Перерва"}</dd>
               </div>
             </dl>
           </section>
 
           <section className="panel">
-            <div className="panel-title">Последние ведра</div>
+            <div className="panel-title">Останні відра</div>
             <BucketTable buckets={recentBuckets} />
           </section>
         </section>
@@ -439,7 +439,7 @@ export default function App() {
               <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
             </label>
             <label>
-              Смена
+              Зміна
               <select value={shift} onChange={(event) => setShift(event.target.value)}>
                 {SHIFT_OPTIONS.map((option) => (
                   <option key={option.code} value={option.code}>
@@ -451,14 +451,14 @@ export default function App() {
           </div>
 
           <div className="metrics">
-            <Metric label={shift === "all" ? "Ведер за дату" : "Ведер за смену"} value={history.bucket_count || 0} />
-            <Metric label={shift === "all" ? "Вес за дату" : "Вес за смену"} value={formatKg(history.total_weight)} />
-            <Metric label="Всего ведер за дату" value={history.all_bucket_count ?? history.bucket_count ?? 0} />
-            <Metric label="Всего вес за дату" value={formatKg(history.all_total_weight ?? history.total_weight)} />
+            <Metric label={shift === "all" ? "Відер за дату" : "Відер за зміну"} value={history.bucket_count || 0} />
+            <Metric label={shift === "all" ? "Вага за дату" : "Вага за зміну"} value={formatKg(history.total_weight)} />
+            <Metric label="Усього відер за дату" value={history.all_bucket_count ?? history.bucket_count ?? 0} />
+            <Metric label="Загальна вага за дату" value={formatKg(history.all_total_weight ?? history.total_weight)} />
           </div>
 
           <section className="panel">
-            <div className="panel-title">История за {date}</div>
+            <div className="panel-title">Історія за {date}</div>
             <BucketTable buckets={numberedHistoryBuckets} onDownload={handleDownload} showDownload />
           </section>
         </section>
