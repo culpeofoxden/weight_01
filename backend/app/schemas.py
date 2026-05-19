@@ -40,6 +40,10 @@ class Bucket(BaseModel):
     end_timestamp: datetime
     max_weight: float
     bucket_date: date
+    shift_code: str
+    shift_label: str
+    shift_date: date
+    shift_overlap_seconds: int = 0
 
 
 class Status(BaseModel):
@@ -50,6 +54,9 @@ class Status(BaseModel):
     current_bucket: int
     today_bucket_count: int
     today_total_weight: float
+    current_shift: dict
+    current_shift_bucket_count: int
+    current_shift_total_weight: float
     current_bucket_max_weight: float
     latest_measurement: Optional[Measurement] = None
     current_bucket_started_at: Optional[datetime] = None
@@ -59,8 +66,12 @@ class Status(BaseModel):
 
 class BucketList(BaseModel):
     date: date
+    shift: str = "all"
+    shifts: list[dict] = Field(default_factory=list)
     bucket_count: int
     total_weight: float
+    all_bucket_count: int = 0
+    all_total_weight: float = 0.0
     buckets: List[Bucket]
 
 

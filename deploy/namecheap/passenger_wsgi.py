@@ -5,7 +5,7 @@ import os
 import secrets
 import sqlite3
 import time
-from datetime import date, datetime
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from http import cookies
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -25,7 +25,10 @@ API_KEY = os.getenv("WEIGHT_DASHBOARD_API_KEY", PASSWORD)
 SECRET = os.getenv("WEIGHT_DASHBOARD_SECRET", "dev-weight-dashboard-secret")
 SESSION_COOKIE = "weight_dashboard_session"
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 12
-UKRAINE_TZ = ZoneInfo("Europe/Kyiv")
+try:
+    UKRAINE_TZ = ZoneInfo("Europe/Kyiv")
+except Exception:
+    UKRAINE_TZ = timezone(timedelta(hours=3))
 
 NEAR_ZERO_THRESHOLD = 0.05
 FILLING_START_THRESHOLD = 0.2
@@ -33,6 +36,12 @@ REMOVED_THRESHOLD = -0.5
 STABLE_READING_COUNT = 5
 REFRESH_INTERVAL_SECONDS = 30
 REFRESH_LOCK_STALE_SECONDS = 120
+SHIFTS = [
+    {"code": "day_before_lunch", "label": "День до обіду", "start": 8 * 60, "end": 13 * 60},
+    {"code": "day_after_lunch", "label": "День після обіду", "start": 14 * 60, "end": 20 * 60},
+    {"code": "night_before_lunch", "label": "Ніч до обіду", "start": 20 * 60, "end": 1 * 60},
+    {"code": "night_after_lunch", "label": "Ніч після обіду", "start": 2 * 60, "end": 8 * 60},
+]
 
 signer = TimestampSigner(SECRET)
 
@@ -47,6 +56,84 @@ def stable_weight(readings):
     if len(tail) % 2:
         return tail[middle]
     return (tail[middle - 1] + tail[middle]) / 2
+
+
+def parse_bucket_timestamp(value):
+    timestamp = datetime.fromisoformat(value)
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=UKRAINE_TZ)
+    return timestamp.astimezone(UKRAINE_TZ)
+
+
+def minutes_to_time(minutes):
+    return datetime_time(hour=minutes // 60, minute=minutes % 60)
+
+
+def shift_window_for_date(shift, window_date):
+    start = datetime.combine(window_date, minutes_to_time(shift["start"]), UKRAINE_TZ)
+    end_date = window_date + timedelta(days=1) if shift["end"] <= shift["start"] else window_date
+    end = datetime.combine(end_date, minutes_to_time(shift["end"]), UKRAINE_TZ)
+    return start, end
+
+
+def bucket_shift(start_timestamp, end_timestamp):
+    start = parse_bucket_timestamp(start_timestamp)
+    end = parse_bucket_timestamp(end_timestamp)
+    if end < start:
+        end = start
+
+    best_shift = None
+    best_seconds = 0
+    first_day = start.date() - timedelta(days=1)
+    last_day = end.date() + timedelta(days=1)
+    day = first_day
+
+    while day <= last_day:
+        for shift in SHIFTS:
+            window_start, window_end = shift_window_for_date(shift, day)
+            overlap_start = max(start, window_start)
+            overlap_end = min(end, window_end)
+            overlap_seconds = max(0, (overlap_end - overlap_start).total_seconds())
+            if overlap_seconds > best_seconds:
+                best_seconds = overlap_seconds
+                best_shift = {
+                    "shift_code": shift["code"],
+                    "shift_label": shift["label"],
+                    "shift_date": window_start.date().isoformat(),
+                    "shift_overlap_seconds": int(overlap_seconds),
+                }
+        day += timedelta(days=1)
+
+    if best_shift is None:
+        return {
+            "shift_code": "break",
+            "shift_label": "Перерва",
+            "shift_date": start.date().isoformat(),
+            "shift_overlap_seconds": 0,
+        }
+    return best_shift
+
+
+def current_shift_at(moment):
+    moment = moment.astimezone(UKRAINE_TZ)
+    first_day = moment.date() - timedelta(days=1)
+    for offset in range(3):
+        day = first_day + timedelta(days=offset)
+        for shift in SHIFTS:
+            window_start, window_end = shift_window_for_date(shift, day)
+            if window_start <= moment < window_end:
+                return {
+                    "shift_code": shift["code"],
+                    "shift_label": shift["label"],
+                    "shift_date": window_start.date().isoformat(),
+                    "shift_overlap_seconds": 0,
+                }
+    return {
+        "shift_code": "break",
+        "shift_label": "Перерва",
+        "shift_date": moment.date().isoformat(),
+        "shift_overlap_seconds": 0,
+    }
 
 
 def init_db():
@@ -412,16 +499,24 @@ def current_state(measurements, device_statuses=()):
 
 
 def rows_to_buckets(rows):
-    return [
-        {
+    buckets = []
+    for row in rows:
+        shift = bucket_shift(row["start_timestamp"], row["end_timestamp"])
+        buckets.append({
             "id": row["id"],
             "start_timestamp": row["start_timestamp"],
             "end_timestamp": row["end_timestamp"],
             "max_weight": row["max_weight"],
             "bucket_date": row["bucket_date"],
-        }
-        for row in rows
-    ]
+            **shift,
+        })
+    return buckets
+
+
+def filter_buckets_by_shift(buckets, shift_code):
+    if not shift_code or shift_code == "all":
+        return buckets
+    return [bucket for bucket in buckets if bucket.get("shift_code") == shift_code]
 
 
 def serve_file(start_response, path, content_type):
@@ -526,9 +621,12 @@ def application(environ, start_response):
         device_statuses = list_recent_device_statuses()
         latest_status_rows = query("SELECT * FROM device_statuses ORDER BY timestamp DESC, id DESC LIMIT 1")
         latest_device_status = latest_status_rows[0] if latest_status_rows else None
-        all_buckets = query("SELECT * FROM buckets ORDER BY start_timestamp ASC, id ASC")
-        today = datetime.now(UKRAINE_TZ).date().isoformat()
-        today_buckets = query("SELECT * FROM buckets WHERE bucket_date = ? ORDER BY start_timestamp ASC, id ASC", (today,))
+        all_buckets = rows_to_buckets(query("SELECT * FROM buckets ORDER BY start_timestamp ASC, id ASC"))
+        now_ukraine = datetime.now(UKRAINE_TZ)
+        today = now_ukraine.date().isoformat()
+        today_buckets = rows_to_buckets(query("SELECT * FROM buckets WHERE bucket_date = ? ORDER BY start_timestamp ASC, id ASC", (today,)))
+        current_shift = current_shift_at(now_ukraine)
+        current_shift_buckets = filter_buckets_by_shift(today_buckets, current_shift["shift_code"])
         state = current_state(measurements, device_statuses)
         device_status_is_current = latest_device_status is not None and (
             latest is None or latest_device_status["timestamp"] >= latest["timestamp"]
@@ -549,6 +647,9 @@ def application(environ, start_response):
                 "current_bucket": len(all_buckets) + 1,
                 "today_bucket_count": len(today_buckets),
                 "today_total_weight": sum(float(bucket["max_weight"]) for bucket in today_buckets),
+                "current_shift": current_shift,
+                "current_shift_bucket_count": len(current_shift_buckets),
+                "current_shift_total_weight": sum(float(bucket["max_weight"]) for bucket in current_shift_buckets),
                 "current_bucket_max_weight": state["current_bucket_max_weight"],
                 "latest_measurement": dict(latest) if latest else None,
                 "current_bucket_started_at": state["current_bucket_started_at"],
@@ -564,12 +665,23 @@ def application(environ, start_response):
         refresh_buckets_if_stale()
         params = parse_qs(environ.get("QUERY_STRING", ""))
         selected_date = params.get("date", [datetime.now(UKRAINE_TZ).date().isoformat()])[0]
+        selected_shift = params.get("shift", ["all"])[0]
         bucket_rows = query("SELECT * FROM buckets WHERE bucket_date = ? ORDER BY start_timestamp ASC, id ASC", (selected_date,))
-        buckets = rows_to_buckets(bucket_rows)
+        all_date_buckets = rows_to_buckets(bucket_rows)
+        buckets = filter_buckets_by_shift(all_date_buckets, selected_shift)
         return json_response(
             start_response,
             "200 OK",
-            {"date": selected_date, "bucket_count": len(buckets), "total_weight": sum(float(b["max_weight"]) for b in buckets), "buckets": buckets},
+            {
+                "date": selected_date,
+                "shift": selected_shift,
+                "shifts": SHIFTS,
+                "bucket_count": len(buckets),
+                "total_weight": sum(float(b["max_weight"]) for b in buckets),
+                "all_bucket_count": len(all_date_buckets),
+                "all_total_weight": sum(float(b["max_weight"]) for b in all_date_buckets),
+                "buckets": buckets,
+            },
         )
 
     if method == "GET" and path.startswith("/api/buckets/") and path.endswith("/measurements.csv"):

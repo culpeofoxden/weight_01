@@ -1,7 +1,7 @@
 import csv
 import io
 from pathlib import Path
-from datetime import date as date_cls, datetime
+from datetime import date as date_cls, datetime, time as datetime_time, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -35,7 +35,99 @@ from .schemas import (
 app = FastAPI(title="Weight Bucket Dashboard API")
 analyzer = BucketAnalyzer()
 PUBLIC_DIR = Path(__file__).resolve().parents[2] / "public"
-UKRAINE_TZ = ZoneInfo("Europe/Kyiv")
+try:
+    UKRAINE_TZ = ZoneInfo("Europe/Kyiv")
+except Exception:
+    UKRAINE_TZ = timezone(timedelta(hours=3))
+SHIFTS = [
+    {"code": "day_before_lunch", "label": "День до обіду", "start": 8 * 60, "end": 13 * 60},
+    {"code": "day_after_lunch", "label": "День після обіду", "start": 14 * 60, "end": 20 * 60},
+    {"code": "night_before_lunch", "label": "Ніч до обіду", "start": 20 * 60, "end": 1 * 60},
+    {"code": "night_after_lunch", "label": "Ніч після обіду", "start": 2 * 60, "end": 8 * 60},
+]
+
+
+def _minutes_to_time(minutes: int) -> datetime_time:
+    return datetime_time(hour=minutes // 60, minute=minutes % 60)
+
+
+def _as_ukraine(timestamp: datetime) -> datetime:
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=UKRAINE_TZ)
+    return timestamp.astimezone(UKRAINE_TZ)
+
+
+def _shift_window(shift: dict, window_date: date_cls) -> tuple[datetime, datetime]:
+    start = datetime.combine(window_date, _minutes_to_time(shift["start"]), UKRAINE_TZ)
+    end_date = window_date + timedelta(days=1) if shift["end"] <= shift["start"] else window_date
+    end = datetime.combine(end_date, _minutes_to_time(shift["end"]), UKRAINE_TZ)
+    return start, end
+
+
+def bucket_shift(start_timestamp: datetime, end_timestamp: datetime) -> dict:
+    start = _as_ukraine(start_timestamp)
+    end = max(_as_ukraine(end_timestamp), start)
+    best_shift = None
+    best_seconds = 0
+    day = start.date() - timedelta(days=1)
+    last_day = end.date() + timedelta(days=1)
+
+    while day <= last_day:
+        for shift in SHIFTS:
+            window_start, window_end = _shift_window(shift, day)
+            overlap_start = max(start, window_start)
+            overlap_end = min(end, window_end)
+            overlap_seconds = max(0, int((overlap_end - overlap_start).total_seconds()))
+            if overlap_seconds > best_seconds:
+                best_seconds = overlap_seconds
+                best_shift = {
+                    "shift_code": shift["code"],
+                    "shift_label": shift["label"],
+                    "shift_date": window_start.date(),
+                    "shift_overlap_seconds": overlap_seconds,
+                }
+        day += timedelta(days=1)
+
+    if best_shift is None:
+        return {
+            "shift_code": "break",
+            "shift_label": "Перерва",
+            "shift_date": start.date(),
+            "shift_overlap_seconds": 0,
+        }
+    return best_shift
+
+
+def current_shift_at(moment: datetime) -> dict:
+    moment = _as_ukraine(moment)
+    day = moment.date() - timedelta(days=1)
+    for offset in range(3):
+        window_day = day + timedelta(days=offset)
+        for shift in SHIFTS:
+            window_start, window_end = _shift_window(shift, window_day)
+            if window_start <= moment < window_end:
+                return {
+                    "shift_code": shift["code"],
+                    "shift_label": shift["label"],
+                    "shift_date": window_start.date(),
+                    "shift_overlap_seconds": 0,
+                }
+    return {
+        "shift_code": "break",
+        "shift_label": "Перерва",
+        "shift_date": moment.date(),
+        "shift_overlap_seconds": 0,
+    }
+
+
+def bucket_to_schema(bucket) -> Bucket:
+    return Bucket(**bucket.__dict__, **bucket_shift(bucket.start_timestamp, bucket.end_timestamp))
+
+
+def filter_buckets_by_shift(buckets: list[Bucket], shift_code: str | None) -> list[Bucket]:
+    if not shift_code or shift_code == "all":
+        return buckets
+    return [bucket for bucket in buckets if bucket.shift_code == shift_code]
 
 
 @app.on_event("startup")
@@ -135,7 +227,9 @@ def get_status(_user: AuthUser = Depends(require_user)) -> Status:
     device_statuses = db.list_device_statuses()
     measurement_count = db.count_rows("measurements")
     all_buckets = db.list_buckets()
-    today_buckets = db.list_buckets(today)
+    today_buckets = [bucket_to_schema(bucket) for bucket in db.list_buckets(today)]
+    current_shift = current_shift_at(datetime.now(UKRAINE_TZ))
+    current_shift_buckets = filter_buckets_by_shift(today_buckets, current_shift["shift_code"])
     state = analyzer.current_state(measurements, device_statuses)
     device_status_is_current = (
         latest_device_status is not None
@@ -150,6 +244,9 @@ def get_status(_user: AuthUser = Depends(require_user)) -> Status:
         current_bucket=len(all_buckets) + 1,
         today_bucket_count=len(today_buckets),
         today_total_weight=sum(bucket.max_weight for bucket in today_buckets),
+        current_shift=current_shift,
+        current_shift_bucket_count=len(current_shift_buckets),
+        current_shift_total_weight=sum(bucket.max_weight for bucket in current_shift_buckets),
         current_bucket_max_weight=state["current_bucket_max_weight"],
         measurements=measurement_count,
         buckets=len(all_buckets),
@@ -161,15 +258,21 @@ def get_status(_user: AuthUser = Depends(require_user)) -> Status:
 @app.get("/api/buckets", response_model=BucketList)
 def get_buckets(
     bucket_date: Optional[date_cls] = Query(default=None, alias="date"),
+    shift: str = Query(default="all"),
     _user: AuthUser = Depends(require_user),
 ) -> BucketList:
     db.init_db()
     selected_date = bucket_date or datetime.now(UKRAINE_TZ).date()
-    buckets = [Bucket(**bucket.__dict__) for bucket in db.list_buckets(selected_date)]
+    all_date_buckets = [bucket_to_schema(bucket) for bucket in db.list_buckets(selected_date)]
+    buckets = filter_buckets_by_shift(all_date_buckets, shift)
     return BucketList(
         date=selected_date,
+        shift=shift,
+        shifts=SHIFTS,
         bucket_count=len(buckets),
         total_weight=sum(bucket.max_weight for bucket in buckets),
+        all_bucket_count=len(all_date_buckets),
+        all_total_weight=sum(bucket.max_weight for bucket in all_date_buckets),
         buckets=buckets,
     )
 

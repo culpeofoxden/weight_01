@@ -10,7 +10,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -160,6 +161,9 @@ h1 {
 
 .toolbar {
   padding: 12px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
 }
 
 .toolbar label {
@@ -170,9 +174,11 @@ h1 {
   font-weight: 700;
 }
 
-.toolbar input {
+.toolbar input,
+.toolbar select {
   border: 1px solid #b8c0cc;
   padding: 8px 10px;
+  background: #ffffff;
 }
 
 .notice {

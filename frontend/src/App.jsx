@@ -9,6 +9,14 @@ const STATUS_LABELS = {
   bucket_removed: "Ведро снято"
 };
 
+const SHIFT_OPTIONS = [
+  { code: "all", label: "Все смены" },
+  { code: "day_before_lunch", label: "День до обіду" },
+  { code: "day_after_lunch", label: "День після обіду" },
+  { code: "night_before_lunch", label: "Ніч до обіду" },
+  { code: "night_after_lunch", label: "Ніч після обіду" }
+];
+
 function today() {
   const parts = new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
@@ -42,6 +50,10 @@ function formatDuration(start, end) {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
   return `${minutes} мин ${rest} сек`;
+}
+
+function shiftLabel(bucket) {
+  return bucket?.shift_label || "Перерва";
 }
 
 function bucketMetricLabel(status) {
@@ -144,7 +156,7 @@ function LoginScreen({ onLogin }) {
 }
 
 function BucketTable({ buckets, showDownload = false, onDownload }) {
-  const colSpan = showDownload ? 6 : 5;
+  const colSpan = showDownload ? 7 : 6;
 
   return (
     <div className="table-wrap">
@@ -154,6 +166,7 @@ function BucketTable({ buckets, showDownload = false, onDownload }) {
             <th>#</th>
             <th>Начало</th>
             <th>Конец</th>
+            <th>Смена</th>
             <th>Вес</th>
             <th>Длительность</th>
             {showDownload ? <th>CSV</th> : null}
@@ -172,6 +185,7 @@ function BucketTable({ buckets, showDownload = false, onDownload }) {
                 <td>{bucket.displayNumber ?? index + 1}</td>
                 <td>{formatDateTime(bucket.start_timestamp)}</td>
                 <td>{formatDateTime(bucket.end_timestamp)}</td>
+                <td>{shiftLabel(bucket)}</td>
                 <td>{formatKg(bucket.max_weight)}</td>
                 <td>{formatDuration(bucket.start_timestamp, bucket.end_timestamp)}</td>
                 {showDownload ? (
@@ -201,6 +215,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [tab, setTab] = useState("now");
   const [date, setDate] = useState(today());
+  const [shift, setShift] = useState("all");
   const [status, setStatus] = useState(null);
   const [todayBuckets, setTodayBuckets] = useState([]);
   const [history, setHistory] = useState({ bucket_count: 0, total_weight: 0, buckets: [] });
@@ -263,7 +278,7 @@ export default function App() {
 
     async function loadHistory() {
       try {
-        const payload = await getJson(`/api/buckets?date=${date}`);
+        const payload = await getJson(`/api/buckets?date=${date}&shift=${shift}`);
         if (!cancelled) {
           setHistory(payload);
           setError("");
@@ -280,7 +295,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [date, user]);
+  }, [date, shift, user]);
 
   async function handleLogout() {
     try {
@@ -313,7 +328,7 @@ export default function App() {
       else if (err.status === 404) {
         setError("Ведро обновилось. История перезагружена, нажмите скачать еще раз.");
         try {
-          const payload = await getJson(`/api/buckets?date=${date}`);
+          const payload = await getJson(`/api/buckets?date=${date}&shift=${shift}`);
           setHistory(payload);
         } catch {
           // Keep the original download error visible.
@@ -385,6 +400,8 @@ export default function App() {
             <Metric label="Ведер сегодня" value={status?.today_bucket_count ?? 0} />
             <Metric label="Вес сегодня" value={formatKg(status?.today_total_weight)} />
             <Metric label={bucketLabel} value={`#${status?.current_bucket ?? 1}`} />
+            <Metric label="Ведер в смене" value={status?.current_shift_bucket_count ?? 0} />
+            <Metric label="Вес в смене" value={formatKg(status?.current_shift_total_weight)} />
           </div>
 
           <section className="panel">
@@ -402,6 +419,10 @@ export default function App() {
                 <dt>Последнее измерение</dt>
                 <dd>{formatDateTime(latestTime)}</dd>
               </div>
+              <div>
+                <dt>Текущая смена</dt>
+                <dd>{status?.current_shift?.shift_label || "Перерва"}</dd>
+              </div>
             </dl>
           </section>
 
@@ -417,11 +438,23 @@ export default function App() {
               Дата
               <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
             </label>
+            <label>
+              Смена
+              <select value={shift} onChange={(event) => setShift(event.target.value)}>
+                {SHIFT_OPTIONS.map((option) => (
+                  <option key={option.code} value={option.code}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <div className="metrics">
-            <Metric label="Ведер за дату" value={history.bucket_count || 0} />
-            <Metric label="Вес за дату" value={formatKg(history.total_weight)} />
+            <Metric label={shift === "all" ? "Ведер за дату" : "Ведер за смену"} value={history.bucket_count || 0} />
+            <Metric label={shift === "all" ? "Вес за дату" : "Вес за смену"} value={formatKg(history.total_weight)} />
+            <Metric label="Всего ведер за дату" value={history.all_bucket_count ?? history.bucket_count ?? 0} />
+            <Metric label="Всего вес за дату" value={formatKg(history.all_total_weight ?? history.total_weight)} />
           </div>
 
           <section className="panel">
