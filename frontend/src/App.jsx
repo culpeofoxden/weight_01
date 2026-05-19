@@ -155,7 +155,7 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-function BucketTable({ buckets, showDownload = false, onDownload }) {
+function BucketTable({ buckets, showDownload = false, onDownload, onDownloadChanges }) {
   const colSpan = showDownload ? 7 : 6;
 
   return (
@@ -193,11 +193,20 @@ function BucketTable({ buckets, showDownload = false, onDownload }) {
                     <button
                       className="download-button"
                       onClick={() => onDownload(bucket)}
-                      title="Завантажити CSV"
+                      title="Повний CSV"
                       type="button"
                     >
                       <span aria-hidden="true">↓</span>
-                      <span className="sr-only">Завантажити CSV</span>
+                      <span className="sr-only">Повний CSV</span>
+                    </button>
+                    <button
+                      className="download-button"
+                      onClick={() => onDownloadChanges(bucket)}
+                      title="CSV без дублів"
+                      type="button"
+                    >
+                      <span aria-hidden="true">Δ</span>
+                      <span className="sr-only">CSV без дублів</span>
                     </button>
                   </td>
                 ) : null}
@@ -310,14 +319,15 @@ export default function App() {
     }
   }
 
-  async function handleDownload(bucket) {
+  async function downloadBucketCsv(bucket, kind) {
     try {
-      const response = await apiFetch(`/api/buckets/${bucket.id}/measurements.csv`);
+      const endpoint = kind === "changes" ? "changes.csv" : "measurements.csv";
+      const response = await apiFetch(`/api/buckets/${bucket.id}/${endpoint}`);
       const blob = await response.blob();
       const href = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = href;
-      link.download = `bucket-${bucket.id}-measurements.csv`;
+      link.download = `bucket-${bucket.id}-${kind === "changes" ? "changes" : "measurements"}.csv`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -459,7 +469,12 @@ export default function App() {
 
           <section className="panel">
             <div className="panel-title">Історія за {date}</div>
-            <BucketTable buckets={numberedHistoryBuckets} onDownload={handleDownload} showDownload />
+            <BucketTable
+              buckets={numberedHistoryBuckets}
+              onDownload={(bucket) => downloadBucketCsv(bucket, "measurements")}
+              onDownloadChanges={(bucket) => downloadBucketCsv(bucket, "changes")}
+              showDownload
+            />
           </section>
         </section>
       )}

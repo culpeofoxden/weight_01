@@ -606,6 +606,30 @@ def filter_buckets_by_shift(buckets, shift_code):
     return [bucket for bucket in buckets if bucket.get("shift_code") == shift_code]
 
 
+def write_measurement_rows(writer, measurement_rows, only_changes=False):
+    writer.writerow(["timestamp", "weight"])
+    previous_weight_text = None
+    pending_last_row = None
+
+    for row in measurement_rows:
+        weight_text = f"{float(row['weight']):.3f}"
+        csv_row = [row["timestamp"], weight_text]
+
+        if not only_changes:
+            writer.writerow(csv_row)
+            continue
+
+        if previous_weight_text is None or weight_text != previous_weight_text:
+            writer.writerow(csv_row)
+            previous_weight_text = weight_text
+            pending_last_row = None
+        else:
+            pending_last_row = csv_row
+
+    if only_changes and pending_last_row is not None:
+        writer.writerow(pending_last_row)
+
+
 def serve_file(start_response, path, content_type):
     if not path.exists() or not path.is_file():
         return text_response(start_response, "404 Not Found", "Not found")
@@ -804,7 +828,9 @@ def application(environ, start_response):
             },
         )
 
-    if method == "GET" and path.startswith("/api/buckets/") and path.endswith("/measurements.csv"):
+    if method == "GET" and path.startswith("/api/buckets/") and (
+        path.endswith("/measurements.csv") or path.endswith("/changes.csv")
+    ):
         denied = auth_required(start_response, environ)
         if denied:
             return denied
@@ -820,12 +846,12 @@ def application(environ, start_response):
             "SELECT timestamp, weight FROM measurements WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC, id ASC",
             (bucket["start_timestamp"], bucket["end_timestamp"]),
         )
+        only_changes = path.endswith("/changes.csv")
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["timestamp", "weight"])
-        for row in measurement_rows:
-            writer.writerow([row["timestamp"], f"{float(row['weight']):.3f}"])
-        filename = f"bucket_{bucket_id}_{bucket['bucket_date']}.csv"
+        write_measurement_rows(writer, measurement_rows, only_changes=only_changes)
+        suffix = "_changes" if only_changes else ""
+        filename = f"bucket_{bucket_id}_{bucket['bucket_date']}{suffix}.csv"
         return text_response(
             start_response,
             "200 OK",

@@ -130,6 +130,30 @@ def filter_buckets_by_shift(buckets: list[Bucket], shift_code: str | None) -> li
     return [bucket for bucket in buckets if bucket.shift_code == shift_code]
 
 
+def write_measurement_rows(writer, measurements, only_changes: bool = False) -> None:
+    writer.writerow(["timestamp", "weight"])
+    previous_weight_text = None
+    pending_last_row = None
+
+    for measurement in measurements:
+        weight_text = f"{measurement.weight:.3f}"
+        row = [measurement.timestamp.isoformat(), weight_text]
+
+        if not only_changes:
+            writer.writerow(row)
+            continue
+
+        if previous_weight_text is None or weight_text != previous_weight_text:
+            writer.writerow(row)
+            previous_weight_text = weight_text
+            pending_last_row = None
+        else:
+            pending_last_row = row
+
+    if only_changes and pending_last_row is not None:
+        writer.writerow(pending_last_row)
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     db.init_db()
@@ -289,11 +313,31 @@ def get_bucket_measurements_csv(
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["timestamp", "weight"])
-    for measurement in db.list_measurements_between(bucket.start_timestamp, bucket.end_timestamp):
-        writer.writerow([measurement.timestamp.isoformat(), f"{measurement.weight:.3f}"])
+    write_measurement_rows(writer, db.list_measurements_between(bucket.start_timestamp, bucket.end_timestamp))
 
     filename = f"bucket_{bucket.id}_{bucket.bucket_date.isoformat()}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/buckets/{bucket_id}/changes.csv")
+def get_bucket_changes_csv(
+    bucket_id: int,
+    _user: AuthUser = Depends(require_user),
+) -> StreamingResponse:
+    db.init_db()
+    bucket = db.get_bucket(bucket_id)
+    if bucket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bucket not found")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    write_measurement_rows(writer, db.list_measurements_between(bucket.start_timestamp, bucket.end_timestamp), only_changes=True)
+
+    filename = f"bucket_{bucket.id}_{bucket.bucket_date.isoformat()}_changes.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv; charset=utf-8",
