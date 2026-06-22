@@ -38,6 +38,8 @@ STABLE_MAX_SPREAD_KG = 0.2
 SUSPECT_DROP_THRESHOLD_KG = 1.0
 REFRESH_INTERVAL_SECONDS = 30
 REFRESH_LOCK_STALE_SECONDS = 120
+STATUS_DEDUP_SECONDS = 60
+SQLITE_TIMEOUT_SECONDS = 30
 SHIFTS = [
     {"code": "day_before_lunch", "label": "День до обіду", "start": 8 * 60, "end": 13 * 60},
     {"code": "day_after_lunch", "label": "День після обіду", "start": 14 * 60, "end": 20 * 60},
@@ -46,6 +48,7 @@ SHIFTS = [
 ]
 
 signer = TimestampSigner(SECRET)
+_DB_READY = False
 
 
 def median(values):
@@ -172,8 +175,16 @@ def current_shift_at(moment):
     }
 
 
+def connect_db():
+    connection = sqlite3.connect(DB_PATH, timeout=SQLITE_TIMEOUT_SECONDS)
+    connection.execute(f"PRAGMA busy_timeout = {SQLITE_TIMEOUT_SECONDS * 1000}")
+    return connection
+
+
 def init_db():
-    with sqlite3.connect(DB_PATH) as connection:
+    with connect_db() as connection:
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = NORMAL")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS measurements (
@@ -243,14 +254,33 @@ def init_db():
         )
 
 
+def ensure_db():
+    global _DB_READY
+    if _DB_READY:
+        return
+
+    last_error = None
+    for attempt in range(5):
+        try:
+            init_db()
+            _DB_READY = True
+            return
+        except sqlite3.OperationalError as exc:
+            last_error = exc
+            if "locked" not in str(exc).lower():
+                raise
+            time.sleep(0.2 * (attempt + 1))
+    raise last_error
+
+
 def query(sql, params=()):
-    with sqlite3.connect(DB_PATH) as connection:
+    with connect_db() as connection:
         connection.row_factory = sqlite3.Row
         return connection.execute(sql, params).fetchall()
 
 
 def execute(sql, params=()):
-    with sqlite3.connect(DB_PATH) as connection:
+    with connect_db() as connection:
         cursor = connection.execute(sql, params)
         return cursor.lastrowid
 
@@ -454,15 +484,47 @@ def analyze_buckets(measurements, device_statuses=()):
 
 
 def refresh_buckets():
-    bucket_list = analyze_buckets(list_measurements(), list_device_statuses())
-    existing_rows = query("SELECT id, start_timestamp, end_timestamp FROM buckets")
-    existing = {(row["start_timestamp"], row["end_timestamp"]): row["id"] for row in existing_rows}
-    next_keys = set()
+    latest_bucket_rows = query(
+        "SELECT end_timestamp FROM buckets ORDER BY end_timestamp DESC, id DESC LIMIT 1"
+    )
+    cutoff = latest_bucket_rows[0]["end_timestamp"] if latest_bucket_rows else None
 
-    with sqlite3.connect(DB_PATH) as connection:
+    if cutoff:
+        measurements = query(
+            """
+            SELECT id, timestamp, weight
+            FROM measurements
+            WHERE timestamp > ?
+            ORDER BY timestamp ASC, id ASC
+            """,
+            (cutoff,),
+        )
+        device_statuses = query(
+            """
+            SELECT id, timestamp, status, raw
+            FROM device_statuses
+            WHERE timestamp > ?
+            ORDER BY timestamp ASC, id ASC
+            """,
+            (cutoff,),
+        )
+    else:
+        measurements = list_measurements()
+        device_statuses = list_device_statuses()
+
+    bucket_list = analyze_buckets(measurements, device_statuses)
+    if not bucket_list:
+        return
+
+    existing_rows = query(
+        "SELECT id, start_timestamp, end_timestamp FROM buckets WHERE end_timestamp > ?",
+        (cutoff or "",),
+    )
+    existing = {(row["start_timestamp"], row["end_timestamp"]): row["id"] for row in existing_rows}
+
+    with connect_db() as connection:
         for bucket in bucket_list:
             key = (bucket["start_timestamp"], bucket["end_timestamp"])
-            next_keys.add(key)
             if key in existing:
                 connection.execute(
                     "UPDATE buckets SET max_weight = ?, bucket_date = ? WHERE id = ?",
@@ -476,9 +538,6 @@ def refresh_buckets():
                     """,
                     (bucket["start_timestamp"], bucket["end_timestamp"], bucket["max_weight"], bucket["bucket_date"]),
                 )
-
-        stale_ids = [row["id"] for row in existing_rows if (row["start_timestamp"], row["end_timestamp"]) not in next_keys]
-        connection.executemany("DELETE FROM buckets WHERE id = ?", [(bucket_id,) for bucket_id in stale_ids])
 
 
 def refresh_buckets_if_stale(force=False):
@@ -639,7 +698,7 @@ def serve_file(start_response, path, content_type):
 
 
 def application(environ, start_response):
-    init_db()
+    ensure_db()
     method = environ.get("REQUEST_METHOD", "GET")
     path = environ.get("PATH_INFO", "/")
 
@@ -703,6 +762,41 @@ def application(environ, start_response):
             )
             if existing:
                 return json_response(start_response, "200 OK", dict(existing[0]))
+
+        latest_status_rows = query(
+            """
+            SELECT id, timestamp, status, raw
+            FROM device_statuses
+            ORDER BY timestamp DESC, id DESC
+            LIMIT 1
+            """
+        )
+        if latest_status_rows:
+            latest_status = latest_status_rows[0]
+            try:
+                current_timestamp = datetime.fromisoformat(payload["timestamp"])
+                previous_timestamp = datetime.fromisoformat(latest_status["timestamp"])
+                seconds_since_previous = (current_timestamp - previous_timestamp).total_seconds()
+            except (TypeError, ValueError):
+                seconds_since_previous = STATUS_DEDUP_SECONDS + 1
+
+            if (
+                latest_status["status"] == payload["status"]
+                and latest_status["raw"] == payload.get("raw", "")
+                and 0 <= seconds_since_previous < STATUS_DEDUP_SECONDS
+            ):
+                return json_response(
+                    start_response,
+                    "200 OK",
+                    {
+                        "id": latest_status["id"],
+                        "timestamp": payload["timestamp"],
+                        "status": payload["status"],
+                        "raw": payload.get("raw", ""),
+                        "deduplicated": True,
+                    },
+                )
+
         status_id = execute(
             """
             INSERT INTO device_statuses (timestamp, status, raw, source_event_id)
